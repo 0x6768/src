@@ -1,0 +1,75 @@
+@echo off
+:: Windows 资源管理器 & 显卡重置工具
+:: 版本：1.2
+:: 描述：此脚本将重置资源管理器、清除缓存并刷新显卡驱动
+
+cls
+echo.
+echo ================================================
+echo       Windows 系统图形组件重置工具
+echo ================================================
+echo.
+echo 本脚本将执行以下操作：
+echo 1. 重启 Windows 资源管理器
+echo 2. 清除图标和缩略图缓存
+echo 3. 重置显卡驱动程序
+echo.
+echo 注意：执行过程中屏幕可能会出现闪烁，这是正常现象。
+echo 建议先保存所有工作再继续！
+echo.
+
+:: 用户确认
+choice /c yn /m "是否要继续执行？(Y/N)" 
+if %errorlevel% equ 2 (
+    echo 用户取消操作。
+    pause
+    exit /b
+)
+
+echo.
+echo [1/5] 正在结束 Windows 资源管理器进程...
+tasklist | find "explorer.exe" >nul
+if %errorlevel% equ 0 (
+    taskkill /f /im explorer.exe >nul
+    if %errorlevel% equ 0 (
+        echo √ 成功结束资源管理器进程
+    ) else (
+        echo × 无法结束资源管理器进程，尝试继续执行...
+    )
+) else (
+    echo ! 资源管理器未在运行
+)
+
+echo.
+echo [2/5] 正在重启桌面窗口管理器(DWM)...
+taskkill /f /im dwm.exe >nul 2>&1
+timeout /t 1 >nul
+start "" dwm.exe
+echo √ DWM已重启
+
+echo.
+echo [3/5] 正在清除系统图标缓存...
+del /a /f /q "%localappdata%\Microsoft\Windows\Explorer\iconcache*.db" >nul 2>&1
+echo √ 图标缓存已清除
+
+echo.
+echo [4/5] 正在清除缩略图缓存...
+del /a /f /q "%localappdata%\Microsoft\Windows\Explorer\thumbcache*.db" >nul 2>&1
+echo √ 缩略图缓存已清除
+
+echo.
+echo [5/5] 正在重启资源管理器并重置显卡驱动...
+start explorer.exe >nul
+timeout /t 2 >nul
+
+echo 正在发送显卡驱动重置指令(Ctrl+Shift+Win+B)...
+echo Set WshShell=CreateObject("WScript.Shell"): WshShell.SendKeys "^{+(^B)}" >"%temp%\gpu_reset.vbs"
+cscript //nologo "%temp%\gpu_reset.vbs" >nul
+del "%temp%\gpu_reset.vbs" >nul 2>&1
+
+echo.
+echo ================================================
+echo  所有操作已完成！建议等待10秒让系统完全恢复
+echo ================================================
+echo.
+pause
