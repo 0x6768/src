@@ -1,127 +1,25 @@
-name: Split and Upload to Release (Linux)
+name: Split and Release
 
-on:
-  workflow_dispatch:
-    inputs:
-      artifact_name:
-        description: 'Artifact name'
-        required: true
-        default: 'youtube-videos'
-      part_size:
-        description: 'Split size (e.g. 1500M, 1G)'
-        required: false
-        default: '1500M'
+on: workflow_dispatch
 
 jobs:
-  process:
+  split:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     
     steps:
-      - name: Install tools
+      - name: Get file
         run: |
-          sudo apt-get update
-          sudo apt-get install -y p7zip-full
-        
-      - name: Download artifact
-        id: download
+          # 下载你的文件
+          echo "下载文件..."
+          
+      - name: Split it
         run: |
-          # 这里放你的实际下载代码
-          echo "下载大文件..."
-          # 示例：创建一个测试文件
-          dd if=/dev/urandom of=large-file.zip bs=1M count=50 status=progress
+          split -b 1500M the-file.zip the-file.part.
           
-          # 保存文件信息
-          FILESIZE=$(wc -c < large-file.zip)
-          echo "file_size=$FILESIZE" >> $GITHUB_OUTPUT
-          
-      - name: Create split archive
-        run: |
-          # 方法1: 用7z分卷 (推荐)
-          7z a -v${{ inputs.part_size }} -mx=0 split.7z large-file.zip
-          
-          # 统计分卷数量
-          PART_COUNT=$(ls split.7z.* 2>/dev/null | wc -l || echo 0)
-          echo "分卷数量: $PART_COUNT"
-          
-      - name: Create extraction script
-        run: |
-          # Linux/Mac 解压脚本
-          cat > extract.sh << 'EOF'
-          #!/bin/bash
-          echo "分卷文件解压工具"
-          echo "=================="
-          echo ""
-          
-          # 检查7z是否可用
-          if ! command -v 7z &> /dev/null; then
-              echo "正在安装 7zip..."
-              if command -v apt-get &> /dev/null; then
-                  sudo apt-get update && sudo apt-get install -y p7zip-full
-              elif command -v yum &> /dev/null; then
-                  sudo yum install -y p7zip
-              elif command -v brew &> /dev/null; then
-                  brew install p7zip
-              else
-                  echo "错误: 无法自动安装7zip，请手动安装:"
-                  echo "  Ubuntu/Debian: sudo apt install p7zip-full"
-                  echo "  RHEL/CentOS: sudo yum install p7zip"
-                  echo "  MacOS: brew install p7zip"
-                  exit 1
-              fi
-          fi
-          
-          echo "开始解压..."
-          7z x split.7z.001
-          
-          if [ $? -eq 0 ]; then
-              echo ""
-              echo "✅ 解压完成！"
-              echo "原始文件: large-file.zip"
-              echo "大小: $(ls -lh large-file.zip | awk '{print $5}')"
-          else
-              echo ""
-              echo "❌ 解压失败，请检查:"
-              echo "1. 是否下载了所有分卷文件 (split.7z.*)"
-              echo "2. 文件是否完整"
-              exit 1
-          fi
-          EOF
-          
-          chmod +x extract.sh
-          
-          # 简单的合并验证脚本
-          cat > verify.sh << 'EOF'
-          #!/bin/bash
-          echo "验证分卷完整性..."
-          echo ""
-          
-          # 检查所有分卷都存在
-          FILES=(split.7z.*)
-          if [ ${#FILES[@]} -eq 0 ]; then
-              echo "错误: 未找到分卷文件 split.7z.*"
-              exit 1
-          fi
-          
-          echo "找到 ${#FILES[@]} 个分卷文件:"
-          ls -lh split.7z.*
-          echo ""
-          echo "✅ 文件列表验证通过"
-          EOF
-          
-          chmod +x verify.sh
-          
-      - name: Create README
-        run: |
-          cat > README.md << 'EOF'
-          # 分卷文件说明
-          
-          ## 文件列表
-          - `split.7z.001`, `split.7z.002`, ... - 分卷压缩文件
-          - `extract.sh` - 自动解压脚本
-          - `verify.sh` - 验证脚本
-          
-          ## 使用方法
-          
-          ### 方法1: 使用脚本 (推荐)
+      - name: Upload
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: split-file
+          name: "Split File"
+          body: "cat the-file.part.* > the-file.zip"
+          files: the-file.part.*
