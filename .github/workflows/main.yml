@@ -1,1 +1,136 @@
+# .github/workflows/youtube-download-ejs.yml
+name: YouTube Download with EJS
 
+on:
+  workflow_dispatch:
+    inputs:
+      playlist_url:
+        description: 'YouTube 播放列表URL'
+        required: true
+        type: string
+        default: 'https://www.youtube.com/playlist?list=PL8Z0MhYCLkZlOL-65EUaQ66DRnNdSwhE8'
+      quality:
+        description: '视频质量'
+        required: false
+        default: '480'
+        type: choice
+        options:
+          - '360'
+          - '480'
+          - '720'
+          - 'best'
+      batch_size:
+        description: '并行下载数量'
+        required: false
+        default: '3'
+        type: string
+
+env:
+  YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+
+jobs:
+  download:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup bun runtime
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 'latest'
+          
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y ffmpeg aria2
+          pip install yt-dlp yt-dlp-ejs
+          echo "✅ 依赖安装完成"
+          
+      - name: Save cookies from environment
+        if: env.YOUTUBE_COOKIES != ''
+        run: |
+          echo "$YOUTUBE_COOKIES" > cookies.txt
+          echo "✅ Cookies 已保存"
+          
+      - name: Show download info
+        run: |
+          echo "========================================"
+          echo "📥 开始下载 YouTube 播放列表"
+          echo "🔗 播放列表URL: ${{ github.event.inputs.playlist_url }}"
+          echo "📹 视频质量: ${{ github.event.inputs.quality }}p"
+          echo "🔄 并行下载: ${{ github.event.inputs.batch_size }} 个视频"
+          echo "========================================"
+          
+      - name: Download playlist with EJS parser
+        run: |
+          # 构建基础命令
+          BASE_CMD="yt-dlp \
+            --js-runtimes bun \
+            -f 'best[height<=${{ github.event.inputs.quality }}]' \
+            --write-subs --sub-langs 'zh-Hans,en,zh' \
+            --embed-subs \
+            --embed-thumbnail \
+            --embed-metadata \
+            --concurrent-fragments 3 \
+            --limit-rate 5M \
+            --retries 10 \
+            --fragment-retries 10 \
+            --external-downloader aria2c \
+            --external-downloader-args '-x 8 -s 8 -k 1M' \
+            --no-warnings \
+            --progress \
+            --newline \
+            --output '%(playlist_index)03d_%(title).40s.%(ext)s'"
+          
+          # 添加 cookies
+          if [ -f cookies.txt ]; then
+            echo "🔐 使用 Cookies 下载"
+            BASE_CMD="$BASE_CMD --cookies cookies.txt"
+          else
+            echo "⚠️ 无 Cookies，公开下载"
+          fi
+          
+          # 并行下载控制
+          if [ "${{ github.event.inputs.batch_size }}" != "1" ]; then
+            BASE_CMD="$BASE_CMD --concurrent-downloads ${{ github.event.inputs.batch_size }}"
+          fi
+          
+          # 执行下载
+          CMD="$BASE_CMD '${{ github.event.inputs.playlist_url }}'"
+          echo "🚀 执行命令: $CMD"
+          echo "========================================"
+          
+          # 执行下载
+          eval $CMD
+          
+          echo "========================================"
+          echo "✅ 下载完成！"
+          
+      - name: List downloaded files
+        run: |
+          echo "📁 下载的文件列表："
+          ls -la *.mp4 *.mkv *.webm 2>/dev/null || echo "没有找到视频文件"
+          echo "📄 字幕文件："
+          ls -la *.srt *.vtt 2>/dev/null || echo "没有找到字幕文件"
+          
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-videos
+          path: |
+            *.mp4
+            *.mkv
+            *.webm
+            *.srt
+            *.vtt
+          retention-days: 7
+          
+      - name: Clean up cookies
+        if: always()
+        run: |
+          if [ -f cookies.txt ]; then
+            rm cookies.txt
+            echo "🧹 Cookies 文件已清理"
+          fi
