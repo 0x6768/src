@@ -69,10 +69,7 @@ jobs:
           BASE_CMD="yt-dlp \
             --js-runtimes bun \
             -f 'best[height<=${{ github.event.inputs.quality }}]' \
-            --write-subs --sub-langs 'zh-Hans,en,zh' \
-            --embed-subs \
-            --embed-thumbnail \
-            --embed-metadata \
+      
             --concurrent-fragments 3 \
             --limit-rate 5M \
             --retries 10 \
@@ -81,7 +78,6 @@ jobs:
             --external-downloader-args '-x 8 -s 8 -k 1M' \
             --no-warnings \
             --progress \
-            --newline \
             --output '%(playlist_index)03d_%(title).40s.%(ext)s'"
           
           # 添加 cookies
@@ -92,10 +88,7 @@ jobs:
             echo "⚠️ 无 Cookies，公开下载"
           fi
           
-          # 并行下载控制
-          if [ "${{ github.event.inputs.batch_size }}" != "1" ]; then
-            BASE_CMD="$BASE_CMD --concurrent-downloads ${{ github.event.inputs.batch_size }}"
-          fi
+         
           
           # 执行下载
           CMD="$BASE_CMD '${{ github.event.inputs.playlist_url }}'"
