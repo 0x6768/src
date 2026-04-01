@@ -1,26 +1,21 @@
-name: Download and Split
+name: Download, Split and Release
 
 on:
   workflow_dispatch:
     inputs:
       url:
-        description: '下载链接'
+        description: '文件下载链接'
         required: true
         type: string
       filename:
-        description: '保存的文件名（带扩展名，如 file.zip）'
+        description: '保存的文件名（如 file.zip）'
         required: true
         default: 'file.zip'
         type: string
       split_size:
-        description: '分卷大小（如 1500M, 2G）'
+        description: '分卷大小（如 1500M）'
         required: false
         default: '1500M'
-        type: string
-      release_tag:
-        description: 'Release标签名称'
-        required: false
-        default: 'split-release'
         type: string
 
 jobs:
@@ -28,42 +23,45 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      packages: write
     
     steps:
       - name: 安装工具
         run: sudo apt-get update && sudo apt-get install -y p7zip-full aria2
         
-      - name: 用aria2c下载
+      - name: 下载文件
         run: |
           echo "开始下载..."
           aria2c -x 16 -s 16 "${{ inputs.url }}" -o "${{ inputs.filename }}"
           
-      - name: 检查文件
-        run: |
-          echo "下载的文件信息:"
-          ls -lh "${{ inputs.filename }}"
-          
       - name: 7z分卷
         run: |
-          # 使用用户提供的文件名进行分卷
+          echo "正在分卷压缩..."
           7z a -v${{ inputs.split_size }} -mx=0 split.7z "${{ inputs.filename }}"
           
-      - name: 生成唯一标签
-        id: generate_tag
+      - name: 获取当前时间
+        id: date
         run: |
-          # 生成唯一标签，避免冲突
-          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-          TAG="${{ inputs.release_tag }}-$TIMESTAMP"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "date=$(date +'%Y%m%d-%H%M%S')" >> $GITHUB_OUTPUT
           
-      - name: 上传到Release
-        uses: softprops/action-gh-release@v1
+      - name: 创建GitHub Release
+        uses: actions/create-release@v1
+        id: create_release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tag_name: ${{ steps.generate_tag.outputs.tag }}
-          name: "分卷文件 ${{ steps.generate_tag.outputs.tag }}"
+          tag_name: split-${{ steps.date.outputs.date }}
+          release_name: Split Files ${{ steps.date.outputs.date }}
           body: |
-            下载所有 split.7z.* 文件
-            
-            解压命令:
-            
+            Split archive files. Download all split.7z.* files
+          draft: false
+          prerelease: false
+          
+      - name: 上传分卷文件到Release
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./split.7z.*
+          asset_name: split.7z
+          asset_content_type: application/x-7z-compressed
