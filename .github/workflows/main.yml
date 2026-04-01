@@ -18,7 +18,7 @@ on:
           - '360'
           - '480'
           - '720'
-          - 'best'
+          - '1080'
       batch_size:
         description: '并行下载数量'
         required: false
