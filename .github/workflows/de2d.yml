@@ -1,25 +1,47 @@
-name: Split and Release
+name: Download and Split
 
-on: workflow_dispatch
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: '下载链接'
+        required: true
+      split_size:
+        description: '分卷大小'
+        default: '1500M'
 
 jobs:
-  split:
+  process:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Get file
+      - name: 安装工具
+        run: sudo apt-get update && sudo apt-get install -y p7zip-full aria2
+        
+      - name: 用aria2c下载
         run: |
-          # 下载你的文件
-          echo "下载文件..."
+          echo "开始下载..."
+          aria2c -x 16 -s 16 "${{ inputs.url }}" -c
           
-      - name: Split it
+      - name: 获取文件名
+        id: get_name
         run: |
-          split -b 1500M the-file.zip the-file.part.
+          # 从URL提取文件名，如果没有就用默认名
+          FILENAME=$(basename "${{ inputs.url }}" | cut -d'?' -f1)
+          if [ -z "$FILENAME" ] || [ "$FILENAME" = "/" ]; then
+            FILENAME="download.file"
+          fi
+          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
           
-      - name: Upload
+      - name: 7z分卷
+        run: |
+          # 假设下载的文件名是步骤2获取的
+          # 实际上aria2c会保持原始文件名
+          7z a -v${{ inputs.split_size }} -mx=0 split.7z *
+          
+      - name: 上传到Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: split-file
-          name: "Split File"
-          body: "cat the-file.part.* > the-file.zip"
-          files: the-file.part.*
+          tag_name: split-$(date +%s)
+          name: "分卷文件"
+          files: split.7z.*
