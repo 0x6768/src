@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       filename:
-        description: '保存的文件名（如 file.zip）'
+        description: '保存的文件名'
         required: true
         default: 'file.zip'
         type: string
@@ -16,6 +16,11 @@ on:
         description: '分卷大小（如 1500M）'
         required: false
         default: '1500M'
+        type: string
+      compress:
+        description: '是否压缩分卷（0-不压缩，1-压缩）'
+        required: false
+        default: '0'
         type: string
 
 jobs:
@@ -33,10 +38,62 @@ jobs:
           echo "开始下载..."
           aria2c -x 16 -s 16 "${{ inputs.url }}" -o "${{ inputs.filename }}"
           
-      - name: 7z分卷
+          # 检查文件是否下载成功
+          if [ ! -f "${{ inputs.filename }}" ]; then
+            echo "错误：文件下载失败！"
+            exit 1
+          fi
+          
+          FILE_SIZE=$(stat -c%s "${{ inputs.filename }}" 2>/dev/null || stat -f%z "${{ inputs.filename }}" 2>/dev/null || echo "0")
+          if [ "$FILE_SIZE" -eq 0 ]; then
+            echo "错误：下载的文件大小为0！"
+            exit 1
+          fi
+          
+          echo "✓ 下载完成，文件大小: $((FILE_SIZE/1024/1024)) MB"
+          
+      - name: 使用split命令分割文件
+        id: split_files
         run: |
-          echo "正在分卷压缩..."
-          7z a -v${{ inputs.split_size }} -mx=0 split.7z "${{ inputs.filename }}"
+          echo "使用split命令分割文件..."
+          echo "分卷大小: ${{ inputs.split_size }}"
+          
+          # 计算分卷数量
+          FILE_SIZE=$(stat -c%s "${{ inputs.filename }}" 2>/dev/null || stat -f%z "${{ inputs.filename }}" 2>/dev/null || echo "0")
+          SPLIT_SIZE_NUM=$(echo "${{ inputs.split_size }}" | sed 's/M/*1024 * 1024/;s/G/*1024 * 1024 * 1024/;s/K/*1024/' | bc)
+          NUM_PARTS=$(( (FILE_SIZE + SPLIT_SIZE_NUM - 1) / SPLIT_SIZE_NUM ))
+          
+          echo "预计分卷数量: $NUM_PARTS"
+          
+          # 使用split命令分割
+          split -b "${{ inputs.split_size }}" --numeric-suffixes=1 --suffix-length=3 "${{ inputs.filename }}" "split_part."
+          
+          # 重命名为.001格式
+          for file in split_part.*; do
+            suffix="${file#split_part.}"
+            new_name="split.$suffix"
+            mv "$file" "$new_name"
+            echo "创建分卷: $new_name"
+          done
+          
+          # 列出生成的文件
+          echo "生成的分卷文件:"
+          ls -lh split.*
+          
+          # 输出分卷数量供后续步骤使用
+          echo "split_count=$(ls split.* 2>/dev/null | wc -l)" >> $GITHUB_OUTPUT
+          
+      - name: 可选压缩分卷
+        if: inputs.compress == '1'
+        run: |
+          echo "压缩分卷文件..."
+          for file in split.*; do
+            if [ "$file" != "split.*" ]; then
+              echo "压缩: $file -> $file.7z"
+              7z a -mx=1 "$file.7z" "$file"
+              rm "$file"
+            fi
+          done
           
       - name: 获取当前时间
         id: date
@@ -52,16 +109,6 @@ jobs:
           tag_name: split-${{ steps.date.outputs.date }}
           release_name: Split Files ${{ steps.date.outputs.date }}
           body: |
-            Split archive files. Download all split.7z.* files
-          draft: false
-          prerelease: false
-          
-      - name: 上传分卷文件到Release
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./split.7z.*
-          asset_name: split.7z
-          asset_content_type: application/x-7z-compressed
+            分卷文件。下载所有 split.* 文件。
+            
+            下载后合并文件:
