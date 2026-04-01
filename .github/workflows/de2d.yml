@@ -1,0 +1,169 @@
+name: Fetch Artifact and Upload to Release
+
+on:
+  workflow_dispatch:  # 手动触发
+    inputs:
+      run_id:
+        description: 'Workflow Run ID (可空，自动查找最新的)'
+        required: false
+        type: string
+      artifact_name:
+        description: 'Artifact 名称'
+        required: true
+        default: 'youtube-videos'
+      release_tag:
+        description: 'Release 标签 (如: v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+  # 可选的定时触发
+  # schedule:
+  #   - cron: '0 */6 * * *'  # 每6小时运行一次
+
+jobs:
+  fetch-and-release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+      
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        
+      - name: Setup environment
+        id: setup
+        run: |
+          # 设置变量
+          REPO="${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          
+          # 如果没有提供 run_id，自动查找最新成功的运行
+          if [ -z "${{ inputs.run_id }}" ]; then
+            echo "自动查找最新的 workflow run..."
+            # 查找当前 workflow 的最新运行
+            RUN_ID=$(curl -s -H "Authorization: token $TOKEN" \
+              "https://api.github.com/repos/$REPO/actions/runs?status=success&per_page=1" \
+              | jq -r '.workflow_runs[0].id')
+          else
+            RUN_ID="${{ inputs.run_id }}"
+          fi
+          
+          echo "使用 Workflow Run ID: $RUN_ID"
+          echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+          
+      - name: List artifacts
+        id: list_artifacts
+        run: |
+          REPO="${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          RUN_ID="${{ steps.setup.outputs.run_id }}"
+          
+          echo "正在列出 $RUN_ID 的所有 artifacts..."
+          
+          # 获取该运行的所有 artifacts
+          ARTIFACTS_JSON=$(curl -s -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts")
+          
+          echo "$ARTIFACTS_JSON" | jq '.'
+          
+          # 查找特定的 artifact
+          ARTIFACT_ID=$(echo "$ARTIFACTS_JSON" | \
+            jq -r ".artifacts[] | select(.name == \"${{ inputs.artifact_name }}\") | .id")
+            
+          if [ -z "$ARTIFACT_ID" ] || [ "$ARTIFACT_ID" = "null" ]; then
+            echo "错误: 未找到名为 '${{ inputs.artifact_name }}' 的 artifact"
+            echo "可用的 artifacts:"
+            echo "$ARTIFACTS_JSON" | jq -r '.artifacts[].name'
+            exit 1
+          fi
+          
+          echo "找到 Artifact ID: $ARTIFACT_ID"
+          echo "artifact_id=$ARTIFACT_ID" >> $GITHUB_OUTPUT
+          
+      - name: Download artifact via API
+        id: download
+        run: |
+          REPO="${{ github.repository }}"
+          TOKEN="${{ secrets.GITHUB_TOKEN }}"
+          ARTIFACT_ID="${{ steps.list_artifacts.outputs.artifact_id }}"
+          ARTIFACT_NAME="${{ inputs.artifact_name }}"
+          
+          echo "正在下载 artifact ID: $ARTIFACT_ID..."
+          echo "文件名: $ARTIFACT_NAME.zip"
+          
+          # 下载 artifact (GitHub API 会返回 302 重定向到实际下载链接)
+          curl -L -H "Authorization: token $TOKEN" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/$REPO/actions/artifacts/$ARTIFACT_ID/zip" \
+            -o "$ARTIFACT_NAME.zip" \
+            --retry 3 --retry-delay 5
+          
+          # 检查文件
+          FILESIZE=$(stat -c%s "$ARTIFACT_NAME.zip" 2>/dev/null || stat -f%z "$ARTIFACT_NAME.zip")
+          echo "文件大小: $((FILESIZE / 1024 / 1024)) MB"
+          
+          if [ $FILESIZE -lt 1000 ]; then
+            echo "错误: 文件大小异常，可能是下载失败"
+            exit 1
+          fi
+          
+          echo "文件路径: $ARTIFACT_NAME.zip" >> $GITHUB_OUTPUT
+          
+      - name: Verify downloaded file
+        run: |
+          FILE="${{ inputs.artifact_name }}.zip"
+          
+          echo "验证文件完整性..."
+          file "$FILE" || true
+          
+          # 尝试列出 zip 内容（不实际解压）
+          unzip -l "$FILE" 2>/dev/null | head -20 || \
+            echo "文件可能是有效的，但无法列出内容"
+          
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          name: Release ${{ inputs.release_tag }}
+          body: |
+            ## Artifact 下载
+            
+            来自 GitHub Actions 的自动发布
+            
+            - **来源 Artifact**: ${{ inputs.artifact_name }}
+            - **Workflow Run**: [${{ steps.setup.outputs.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ steps.setup.outputs.run_id }})
+            - **生成时间**: ${{ fromJSON('[]') && date.inspect }}
+            - **触发方式**: ${{ github.event_name }}
+            
+            ### 文件信息
+            - 文件名: ${{ inputs.artifact_name }}.zip
+            - 类型: ZIP 压缩包
+            
+            > 此 Release 由自动化 workflow 创建
+            > 原始 artifact 可能会过期，但此文件会永久保留
+          
+          draft: false
+          prerelease: false
+          files: ${{ inputs.artifact_name }}.zip
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Upload with retry for large files
+        if: steps.create_release.outputs.result != 'success'
+        run: |
+          # 如果上面的方法失败，尝试用另一个 action
+          gh release create ${{ inputs.release_tag }} \
+            --title "Release ${{ inputs.release_tag }}" \
+            --notes "Automated release from artifact" \
+            ${{ inputs.artifact_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Clean up
+        if: always()
+        run: |
+          rm -f "${{ inputs.artifact_name }}.zip"
+          echo "清理完成"
