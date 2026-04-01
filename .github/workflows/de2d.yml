@@ -6,13 +6,29 @@ on:
       url:
         description: '下载链接'
         required: true
+        type: string
+      filename:
+        description: '保存的文件名（带扩展名，如 file.zip）'
+        required: true
+        default: 'file.zip'
+        type: string
       split_size:
-        description: '分卷大小'
+        description: '分卷大小（如 1500M, 2G）'
+        required: false
         default: '1500M'
+        type: string
+      release_tag:
+        description: 'Release标签名称'
+        required: false
+        default: 'split-release'
+        type: string
 
 jobs:
   process:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
     
     steps:
       - name: 安装工具
@@ -21,27 +37,33 @@ jobs:
       - name: 用aria2c下载
         run: |
           echo "开始下载..."
-          aria2c -x 16 -s 16 "${{ inputs.url }}" -c
+          aria2c -x 16 -s 16 "${{ inputs.url }}" -o "${{ inputs.filename }}"
           
-      - name: 获取文件名
-        id: get_name
+      - name: 检查文件
         run: |
-          # 从URL提取文件名，如果没有就用默认名
-          FILENAME=$(basename "${{ inputs.url }}" | cut -d'?' -f1)
-          if [ -z "$FILENAME" ] || [ "$FILENAME" = "/" ]; then
-            FILENAME="download.file"
-          fi
-          echo "filename=$FILENAME" >> $GITHUB_OUTPUT
+          echo "下载的文件信息:"
+          ls -lh "${{ inputs.filename }}"
           
       - name: 7z分卷
         run: |
-          # 假设下载的文件名是步骤2获取的
-          # 实际上aria2c会保持原始文件名
-          7z a -v${{ inputs.split_size }} -mx=0 split.7z *
+          # 使用用户提供的文件名进行分卷
+          7z a -v${{ inputs.split_size }} -mx=0 split.7z "${{ inputs.filename }}"
+          
+      - name: 生成唯一标签
+        id: generate_tag
+        run: |
+          # 生成唯一标签，避免冲突
+          TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+          TAG="${{ inputs.release_tag }}-$TIMESTAMP"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
           
       - name: 上传到Release
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: split-$(date +%s)
-          name: "分卷文件"
-          files: split.7z.*
+          tag_name: ${{ steps.generate_tag.outputs.tag }}
+          name: "分卷文件 ${{ steps.generate_tag.outputs.tag }}"
+          body: |
+            下载所有 split.7z.* 文件
+            
+            解压命令:
+            
